@@ -1,0 +1,35 @@
+name: VF Domain Phase3 Playwright Bootstrap
+
+on:
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-playwright-chromium:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download Playwright Chromium only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user 'playwright==1.57.0'
+          export PATH="$HOME/.local/bin:$PATH"
+          python3 -m playwright install chromium
+          test -d "$HOME/.cache/ms-playwright"
+          tar -C "$HOME/.cache" -czf "$GITHUB_WORKSPACE/playwright-chromium-1.57.0-linux.tar.gz" ms-playwright
+          sha256sum "$GITHUB_WORKSPACE/playwright-chromium-1.57.0-linux.tar.gz" > "$GITHUB_WORKSPACE/playwright-chromium-1.57.0-linux.tar.gz.sha256"
+
+      - name: Upload Chromium bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-domain-phase3-playwright-chromium-1.57.0
+          path: |
+            playwright-chromium-1.57.0-linux.tar.gz
+            playwright-chromium-1.57.0-linux.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1
