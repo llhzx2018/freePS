@@ -1,0 +1,68 @@
+name: VF Domain Phase3 IANA RDAP Probe
+
+on:
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-public-rdap:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Probe public IANA bootstrap and RDAP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/responses
+          curl -fLsS --connect-timeout 10 --max-time 30 \
+            -D evidence/iana-headers.txt \
+            https://data.iana.org/rdap/dns.json \
+            -o evidence/iana-dns.json
+
+          python3 - <<'PY'
+          import json, ssl, urllib.request, pathlib, datetime
+          root=pathlib.Path('evidence')
+          data=json.loads((root/'iana-dns.json').read_text())
+          mapping={}
+          for names, urls in data.get('services',[]):
+              for name in names:
+                  mapping[name.lower().lstrip('.')]=urls
+          samples={'com':'example.com','net':'example.net','org':'example.org'}
+          report={'checked_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(), 'iana_services':len(data.get('services',[])), 'samples':[]}
+          ctx=ssl.create_default_context()
+          for tld, domain in samples.items():
+              urls=mapping.get(tld) or []
+              if not urls:
+                  report['samples'].append({'tld':tld,'domain':domain,'result':'no_bootstrap'})
+                  continue
+              base=urls[0]
+              url=base.rstrip('/')+'/domain/'+domain
+              req=urllib.request.Request(url,headers={'Accept':'application/rdap+json, application/json','User-Agent':'VF-Domain-Phase3-Network-Probe/1.0'})
+              try:
+                  with urllib.request.urlopen(req,context=ctx,timeout=30) as r:
+                      body=r.read(2_000_000)
+                      ctype=r.headers.get('Content-Type','')
+                      status=r.status
+                  (root/'responses'/f'{tld}.json').write_bytes(body)
+                  parsed=json.loads(body)
+                  report['samples'].append({'tld':tld,'domain':domain,'bootstrap':base,'url':url,'http_status':status,'content_type':ctype,'objectClassName':parsed.get('objectClassName'),'ldhName':parsed.get('ldhName'),'bytes':len(body),'result':'success'})
+              except Exception as e:
+                  report['samples'].append({'tld':tld,'domain':domain,'bootstrap':base,'url':url,'result':'failed','error':type(e).__name__+': '+str(e)})
+          (root/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
+          print(json.dumps(report,ensure_ascii=False,indent=2))
+          if not any(x.get('result')=='success' for x in report['samples']):
+              raise SystemExit('No public RDAP sample succeeded')
+          PY
+          sha256sum evidence/iana-dns.json evidence/report.json evidence/responses/* > evidence/SHA256SUMS.txt
+
+      - name: Upload network evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-domain-phase3-iana-rdap-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 1
