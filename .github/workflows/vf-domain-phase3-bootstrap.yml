@@ -13,7 +13,7 @@ jobs:
   fetch-debian-packages:
     runs-on: ubuntu-24.04
     steps:
-      - name: Download official Debian 13 packages
+      - name: Download Debian 13 packages
         shell: bash
         run: |
           set -euo pipefail
@@ -21,24 +21,29 @@ jobs:
           docker run --rm -v "$PWD/out:/out" debian:trixie-slim bash -lc '
             set -euo pipefail
             apt-get update
-            PHP_VER="8.4.16-1~deb13u1"
-            apt-get download \
-              "php8.4-sqlite3=${PHP_VER}" \
-              "php8.4-curl=${PHP_VER}" \
-              "php8.4-zip=${PHP_VER}" \
-              sqlite3 \
-              libsqlite3-0 \
-              libzip5
+            apt-get install -y --no-install-recommends ca-certificates curl
+
+            BASE="https://cermin.rumahweb.id/debian-security/pool/updates/main/p/php8.4"
+            VER="8.4.16-1~deb13u1"
+            for MOD in sqlite3 curl zip; do
+              curl -fL --retry 3 --retry-delay 2 \
+                "$BASE/php8.4-${MOD}_${VER}_amd64.deb" \
+                -o "/out/php8.4-${MOD}_${VER}_amd64.deb"
+            done
+
+            mkdir -p /tmp/debs && cd /tmp/debs
+            apt-get download sqlite3 libsqlite3-0 libzip5
             mv ./*.deb /out/
           '
+
           cd out
           sha256sum *.deb | sort -k2 > SHA256SUMS.txt
-          dpkg-deb -f php8.4-sqlite3_*.deb Package Version Architecture
-          dpkg-deb -f php8.4-curl_*.deb Package Version Architecture
-          dpkg-deb -f php8.4-zip_*.deb Package Version Architecture
-          dpkg-deb -f sqlite3_*.deb Package Version Architecture
-          dpkg-deb -f libsqlite3-0_*.deb Package Version Architecture
-          dpkg-deb -f libzip5_*.deb Package Version Architecture
+          dpkg-deb -f php8.4-sqlite3_*.deb Package Version Architecture Depends
+          dpkg-deb -f php8.4-curl_*.deb Package Version Architecture Depends
+          dpkg-deb -f php8.4-zip_*.deb Package Version Architecture Depends
+          dpkg-deb -f sqlite3_*.deb Package Version Architecture Depends
+          dpkg-deb -f libsqlite3-0_*.deb Package Version Architecture Depends
+          dpkg-deb -f libzip5_*.deb Package Version Architecture Depends
 
       - name: Upload package bundle
         uses: actions/upload-artifact@v4
