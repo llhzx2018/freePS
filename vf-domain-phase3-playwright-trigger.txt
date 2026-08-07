@@ -1,0 +1,1 @@
+Temporary generic Playwright bootstrap trigger. No VF Domain source, domains, credentials, configuration, or private data.
