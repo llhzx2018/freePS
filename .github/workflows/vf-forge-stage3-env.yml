@@ -1,0 +1,54 @@
+name: VF Forge Stage3 Environment
+
+on:
+  push:
+    branches:
+      - vf-forge-stage3-e2e
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  environment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated test branch
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_sqlite, sqlite3, zip, mbstring, fileinfo, openssl
+          coverage: none
+
+      - name: Install real-environment tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sqlite3 nginx chromium-browser || sudo apt-get install -y sqlite3 nginx chromium
+
+      - name: Verify VF Forge Phase 3 runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== PHP ==='
+          php -v
+          test "$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')" = '8.2'
+          echo '=== PDO drivers ==='
+          php -r '$d=PDO::getAvailableDrivers(); echo json_encode($d), PHP_EOL; if(!in_array("sqlite",$d,true)) exit(21);'
+          echo '=== Required extensions ==='
+          php -r '$required=["pdo_sqlite","sqlite3","zip","fileinfo","openssl","mbstring","json","session"]; foreach($required as $e){echo $e,"=",extension_loaded($e)?"PASS":"FAIL",PHP_EOL;if(!extension_loaded($e))exit(22);}'
+          php -r 'echo "ZipArchive=",class_exists("ZipArchive")?"PASS":"FAIL",PHP_EOL; if(!class_exists("ZipArchive")) exit(23);'
+          echo '=== SQLite CLI ==='
+          sqlite3 --version
+          echo '=== tar ==='
+          tar --version | head -1
+          echo '=== OPcache ==='
+          php -d opcache.enable_cli=1 -r 'echo "Zend OPcache=",extension_loaded("Zend OPcache")?"PASS":"FAIL",PHP_EOL; if(!extension_loaded("Zend OPcache")) exit(24);'
+          echo '=== Nginx ==='
+          nginx -v
+          echo '=== Chromium ==='
+          (chromium-browser --version || chromium --version || google-chrome --version)
+          echo 'VF_FORGE_STAGE3_ENVIRONMENT=PASS'
