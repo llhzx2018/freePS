@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - vf-forge-stage3-e2e
+    paths-ignore:
+      - 'vf-forge-stage3/**'
   workflow_dispatch:
 
 permissions:
