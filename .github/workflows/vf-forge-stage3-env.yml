@@ -14,7 +14,7 @@ permissions:
 jobs:
   environment:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout isolated test branch
         uses: actions/checkout@v4
@@ -64,12 +64,36 @@ jobs:
             https://raw.githubusercontent.com/NativePHP/php-bin/0.6.1/bin/linux/x64/php-8.2.zip \
             -o runtime-artifact/php-8.2.zip
           sha256sum runtime-artifact/php-8.2.zip | tee runtime-artifact/SHA256SUMS
-          unzip -l runtime-artifact/php-8.2.zip | sed -n '1,80p'
 
       - name: Upload portable PHP 8.2 runtime
         uses: actions/upload-artifact@v4
         with:
           name: vf-forge-php82-runtime
           path: runtime-artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Build portable Chrome artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
+          REAL_BIN="$(readlink -f "$CHROME_BIN")"
+          CHROME_DIR="$(dirname "$REAL_BIN")"
+          echo "chrome_bin=$CHROME_BIN"
+          echo "real_bin=$REAL_BIN"
+          echo "chrome_dir=$CHROME_DIR"
+          "$CHROME_BIN" --version
+          mkdir -p chrome-artifact
+          tar -C "$(dirname "$CHROME_DIR")" -czf chrome-artifact/chrome-runtime.tar.gz "$(basename "$CHROME_DIR")"
+          printf '%s\n' "$REAL_BIN" > chrome-artifact/ORIGINAL_PATH.txt
+          sha256sum chrome-artifact/chrome-runtime.tar.gz | tee chrome-artifact/SHA256SUMS
+          du -h chrome-artifact/chrome-runtime.tar.gz
+
+      - name: Upload portable Chrome runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-forge-chrome-runtime
+          path: chrome-artifact/
           if-no-files-found: error
           retention-days: 1
