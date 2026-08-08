@@ -1,0 +1,28 @@
+name: vf-library-phase3-env
+
+on:
+  push:
+    branches:
+      - vf-library-phase3-env-20260808
+
+jobs:
+  build-env-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Debian runtime packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p deps
+          base='https://debian.stanford.edu/debian/pool/main/p/php8.4'
+          curl -fL "$base/php8.4-sqlite3_8.4.23-1~deb13u1_amd64.deb" -o deps/php8.4-sqlite3.deb
+          curl -fL "$base/php8.4-zip_8.4.23-1~deb13u1_amd64.deb" -o deps/php8.4-zip.deb
+          curl -fL "$base/php8.4-fpm_8.4.23-1~deb13u1_amd64.deb" -o deps/php8.4-fpm.deb
+          curl -fL 'https://ftp.debian.org/debian/pool/main/s/sqlite3/sqlite3_3.46.1-7+deb13u1_amd64.deb' -o deps/sqlite3.deb
+          sha256sum deps/* | tee deps/SHA256SUMS.txt
+      - name: Upload environment packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-library-phase3-env-debs
+          path: deps/
+          retention-days: 1
