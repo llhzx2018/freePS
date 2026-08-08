@@ -1,86 +1,47 @@
-name: VF Forge Stage3 Environment
+name: VF Forge Stage3 Public Probe
 
 on:
   push:
     branches:
       - vf-forge-stage3-e2e
-    paths-ignore:
-      - 'vf-forge-stage3/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  environment:
+  public_probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - name: Checkout isolated test branch
-        uses: actions/checkout@v4
-
-      - name: Setup PHP 8.2
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          extensions: pdo_sqlite, sqlite3, zip, mbstring, fileinfo, openssl
-          coverage: none
-
-      - name: Install real-environment tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sqlite3 nginx
-
-      - name: Verify VF Forge Phase 3 runtime contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo '=== PHP ==='
-          php -v
-          test "$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')" = '8.2'
-          echo '=== PDO drivers ==='
-          php -r '$d=PDO::getAvailableDrivers(); echo json_encode($d), PHP_EOL; if(!in_array("sqlite",$d,true)) exit(21);'
-          echo '=== Required extensions ==='
-          php -r '$required=["pdo_sqlite","sqlite3","zip","fileinfo","openssl","mbstring","json","session"]; foreach($required as $e){echo $e,"=",extension_loaded($e)?"PASS":"FAIL",PHP_EOL;if(!extension_loaded($e))exit(22);}'
-          php -r 'echo "ZipArchive=",class_exists("ZipArchive")?"PASS":"FAIL",PHP_EOL; if(!class_exists("ZipArchive")) exit(23);'
-          sqlite3 --version
-          tar --version | head -1
-          php -d opcache.enable_cli=1 -r 'echo "Zend OPcache=",extension_loaded("Zend OPcache")?"PASS":"FAIL",PHP_EOL; if(!extension_loaded("Zend OPcache")) exit(24);'
-          nginx -v
-          (google-chrome --version || chromium --version || chromium-browser --version)
-          echo 'VF_FORGE_STAGE3_ENVIRONMENT=PASS'
-
       - name: Probe current public forge.kewaro.com
+        id: probe
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           BASE='https://forge.kewaro.com'
           mkdir -p public-probe
-          echo '=== DNS ==='
-          getent ahostsv4 forge.kewaro.com | tee public-probe/dns.txt
-          test -s public-probe/dns.txt
-
-          echo '=== root ==='
-          ROOT_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/root.html -D public-probe/root.headers -w '%{http_code}' "$BASE/")"
-          echo "ROOT_STATUS=$ROOT_STATUS"
-          case "$ROOT_STATUS" in 200|301|302|303|307|308) ;; *) exit 31;; esac
-          grep -Eai '^(content-security-policy|x-content-type-options|referrer-policy|x-frame-options|x-robots-tag):' public-probe/root.headers | tee public-probe/security-headers.txt || true
-          grep -Eqi 'noindex|nofollow' public-probe/root.html || grep -Eqi '^x-robots-tag:.*noindex' public-probe/root.headers
-
-          echo '=== robots ==='
-          ROBOTS_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/robots.txt -w '%{http_code}' "$BASE/robots.txt")"
-          echo "ROBOTS_STATUS=$ROBOTS_STATUS"
-          test "$ROBOTS_STATUS" = '200'
-          grep -Eqi '^Disallow:[[:space:]]*/[[:space:]]*$' public-probe/robots.txt
-
-          echo '=== unauth session endpoint ==='
-          SESSION_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/session.json -w '%{http_code}' "$BASE/api.php?action=session")"
-          echo "SESSION_STATUS=$SESSION_STATUS"
-          test "$SESSION_STATUS" = '200'
-          grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*false' public-probe/session.json
-
-          echo '=== blocked engineering/private paths ==='
+          : > public-probe/summary.txt
           : > public-probe/path-status.txt
+
+          getent ahostsv4 forge.kewaro.com | tee public-probe/dns.txt || true
+          DNS_OK=0; test -s public-probe/dns.txt && DNS_OK=1
+
+          ROOT_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/root.html -D public-probe/root.headers -w '%{http_code}' "$BASE/" || printf 000)"
+          grep -Eai '^(content-security-policy|x-content-type-options|referrer-policy|x-frame-options|x-robots-tag|server|cf-ray):' public-probe/root.headers > public-probe/security-headers.txt || true
+          grep -Eio '<title>[^<]*</title>' public-probe/root.html > public-probe/title.txt || true
+          grep -Ein 'robots|noindex|nofollow|VF Forge|VF AssetBox|1\.[0-9]+\.[0-9]+' public-probe/root.html | head -80 > public-probe/root-signals.txt || true
+          NOINDEX_OK=0
+          if grep -Eqi 'noindex|nofollow' public-probe/root.html || grep -Eqi '^x-robots-tag:.*noindex' public-probe/root.headers; then NOINDEX_OK=1; fi
+          CSP_OK=0; grep -Eqi '^content-security-policy:' public-probe/root.headers && CSP_OK=1
+
+          ROBOTS_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/robots.txt -w '%{http_code}' "$BASE/robots.txt" || printf 000)"
+          ROBOTS_DISALLOW=0; grep -Eqi '^Disallow:[[:space:]]*/[[:space:]]*$' public-probe/robots.txt && ROBOTS_DISALLOW=1
+
+          SESSION_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/session.json -D public-probe/session.headers -w '%{http_code}' "$BASE/api.php?action=session" || printf 000)"
+          SESSION_UNAUTH=0; grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*false' public-probe/session.json && SESSION_UNAUTH=1
+
+          EXPOSURES=0
           for p in \
             '/app/schema.sql' \
             '/app/bootstrap.php' \
@@ -92,14 +53,25 @@ jobs:
             '/.runtime.php' \
             '/docs/VF_Forge_Web_%E5%AE%8C%E6%95%B4%E9%9C%80%E6%B1%82%E4%B8%8E%E5%BC%80%E5%8F%91%E6%8E%A5%E7%BB%ADSSOT_R2026.08.07_COMPLETE.md'
           do
-            code="$(curl -sS --retry 1 --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE$p")"
+            code="$(curl -sS --retry 1 --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE$p" || printf 000)"
             printf '%s %s\n' "$code" "$p" | tee -a public-probe/path-status.txt
-            case "$code" in 403|404|410) ;; *) echo "PUBLIC_PATH_EXPOSURE=$p status=$code"; exit 32;; esac
+            case "$code" in 403|404|410) ;; *) EXPOSURES=$((EXPOSURES+1));; esac
           done
 
-          echo 'VF_FORGE_PUBLIC_PROBE=PASS'
+          {
+            echo "DNS_OK=$DNS_OK"
+            echo "ROOT_STATUS=$ROOT_STATUS"
+            echo "NOINDEX_OK=$NOINDEX_OK"
+            echo "CSP_OK=$CSP_OK"
+            echo "ROBOTS_STATUS=$ROBOTS_STATUS"
+            echo "ROBOTS_DISALLOW=$ROBOTS_DISALLOW"
+            echo "SESSION_STATUS=$SESSION_STATUS"
+            echo "SESSION_UNAUTH=$SESSION_UNAUTH"
+            echo "PUBLIC_PATH_EXPOSURES=$EXPOSURES"
+          } | tee public-probe/summary.txt
 
       - name: Upload public probe evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: vf-forge-public-probe
@@ -107,41 +79,17 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Build portable PHP 8.2 artifact
+      - name: Evaluate public probe
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p runtime-artifact
-          curl -L --retry 3 --fail \
-            https://raw.githubusercontent.com/NativePHP/php-bin/0.6.1/bin/linux/x64/php-8.2.zip \
-            -o runtime-artifact/php-8.2.zip
-          sha256sum runtime-artifact/php-8.2.zip | tee runtime-artifact/SHA256SUMS
-
-      - name: Upload portable PHP 8.2 runtime
-        uses: actions/upload-artifact@v4
-        with:
-          name: vf-forge-php82-runtime
-          path: runtime-artifact/
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Build portable Chrome artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
-          REAL_BIN="$(readlink -f "$CHROME_BIN")"
-          CHROME_DIR="$(dirname "$REAL_BIN")"
-          "$CHROME_BIN" --version
-          mkdir -p chrome-artifact
-          tar -C "$(dirname "$CHROME_DIR")" -czf chrome-artifact/chrome-runtime.tar.gz "$(basename "$CHROME_DIR")"
-          printf '%s\n' "$REAL_BIN" > chrome-artifact/ORIGINAL_PATH.txt
-          sha256sum chrome-artifact/chrome-runtime.tar.gz | tee chrome-artifact/SHA256SUMS
-
-      - name: Upload portable Chrome runtime
-        uses: actions/upload-artifact@v4
-        with:
-          name: vf-forge-chrome-runtime
-          path: chrome-artifact/
-          if-no-files-found: error
-          retention-days: 1
+          source public-probe/summary.txt
+          test "$DNS_OK" = 1
+          case "$ROOT_STATUS" in 200|301|302|303|307|308) ;; *) exit 31;; esac
+          test "$NOINDEX_OK" = 1
+          test "$ROBOTS_STATUS" = 200
+          test "$ROBOTS_DISALLOW" = 1
+          test "$SESSION_STATUS" = 200
+          test "$SESSION_UNAUTH" = 1
+          test "$PUBLIC_PATH_EXPOSURES" = 0
+          echo 'VF_FORGE_PUBLIC_PROBE=PASS'
