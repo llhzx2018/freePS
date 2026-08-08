@@ -7,22 +7,18 @@ on:
       - '.github/workflows/vf-forge-phase3-runtime.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   extract-runtime:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: true
       - name: Fetch Debian 13 PHP runtime packages
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf phase3-runtime
-          mkdir -p phase3-runtime/raw phase3-runtime/chunks
-          docker run --rm -v "$PWD/phase3-runtime/raw:/out" debian:trixie bash -lc '
+          mkdir -p phase3-runtime
+          docker run --rm -v "$PWD/phase3-runtime:/out" debian:trixie bash -lc '
             set -euo pipefail
             apt-get update
             cd /out
@@ -31,20 +27,10 @@ jobs:
             dpkg-deb -f php8.4-sqlite3_*.deb Package Version Architecture > sqlite-package.txt
             dpkg-deb -f php8.4-zip_*.deb Package Version Architecture > zip-package.txt
           '
-          cp phase3-runtime/raw/SHA256SUMS.txt phase3-runtime/SHA256SUMS.txt
-          cp phase3-runtime/raw/*-package.txt phase3-runtime/
-          for f in phase3-runtime/raw/*.deb; do
-            base=$(basename "$f" .deb)
-            split -b 4500 -d -a 2 "$f" "phase3-runtime/chunks/${base}.part-"
-          done
-          for p in phase3-runtime/chunks/*.part-*; do base64 -w0 "$p" > "$p.b64"; rm "$p"; done
-          rm -rf phase3-runtime/raw
-      - name: Commit temporary runtime payload
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A phase3-runtime
-          git commit -m 'ci: publish temporary VF Forge Phase3 Debian runtime packages'
-          git push
+      - name: Upload temporary runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-forge-phase3-runtime
+          path: phase3-runtime/
+          if-no-files-found: error
+          retention-days: 1
