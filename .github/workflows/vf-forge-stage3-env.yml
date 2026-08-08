@@ -43,10 +43,14 @@ jobs:
           MANIFEST_STATUS="$(fetch manifest "$BASE/release-manifest.json")"
           SCHEMA_STATUS="$(fetch schema "$BASE/app/schema.sql")"
 
-          grep -Eai '^(content-security-policy|x-content-type-options|referrer-policy|x-frame-options|x-robots-tag|server|cf-ray):' public-probe/root.headers > public-probe/security-headers.txt || true
+          grep -Eai '^(content-security-policy|x-content-type-options|referrer-policy|x-frame-options|x-robots-tag|x-vf-forge-nginx-hardening|server|cf-ray):' public-probe/root.headers > public-probe/security-headers.txt || true
           grep -Eio '<title>[^<]*</title>' public-probe/root.body > public-probe/root-title.txt || true
           grep -Eio '<title>[^<]*</title>' public-probe/index-php.body > public-probe/index-php-title.txt || true
           grep -Ein 'robots|noindex|nofollow|VF Forge|VF AssetBox|1\.[0-9]+\.[0-9]+' public-probe/index-php.body | head -80 > public-probe/index-php-signals.txt || true
+          APP_SIGNATURE=0
+          if grep -Eqi 'VF Forge|VF AssetBox' public-probe/index-php.body; then APP_SIGNATURE=1; fi
+          HARDENING_MARKER=0
+          if grep -Eqi '^x-vf-forge-nginx-hardening:[[:space:]]*20260808-r1' public-probe/root.headers; then HARDENING_MARKER=1; fi
           NOINDEX_OK=0
           if grep -Eqi 'noindex|nofollow' public-probe/root.body || grep -Eqi '^x-robots-tag:.*noindex' public-probe/root.headers; then NOINDEX_OK=1; fi
           INDEX_PHP_NOINDEX=0
@@ -87,6 +91,8 @@ jobs:
             echo "SETUP_STATUS=$SETUP_STATUS"
             echo "API_STATUS=$API_STATUS"
             echo "DIAGNOSE_STATUS=$DIAGNOSE_STATUS"
+            echo "APP_SIGNATURE=$APP_SIGNATURE"
+            echo "HARDENING_MARKER=$HARDENING_MARKER"
             echo "NOINDEX_OK=$NOINDEX_OK"
             echo "INDEX_PHP_NOINDEX=$INDEX_PHP_NOINDEX"
             echo "CSP_OK=$CSP_OK"
