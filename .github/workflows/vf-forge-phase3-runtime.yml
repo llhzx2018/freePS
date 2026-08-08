@@ -1,0 +1,48 @@
+name: VF Forge Phase3 Runtime Extractor
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - '.github/workflows/vf-forge-phase3-runtime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  extract-runtime:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Extract Debian 13 PHP 8.4 runtime modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf phase3-runtime
+          mkdir -p phase3-runtime
+          docker run --rm -v "$PWD/phase3-runtime:/out" debian:trixie bash -lc '
+            set -euo pipefail
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends php8.4-cli php8.4-sqlite3 php8.4-zip
+            test "$(php -r "echo PHP_VERSION;")" = "8.4.23" || true
+            test -f /usr/lib/php/20240924/pdo_sqlite.so
+            test -f /usr/lib/php/20240924/sqlite3.so
+            test -f /usr/lib/php/20240924/zip.so
+            cp /usr/lib/php/20240924/pdo_sqlite.so /out/
+            cp /usr/lib/php/20240924/sqlite3.so /out/
+            cp /usr/lib/php/20240924/zip.so /out/
+            php -d extension=/usr/lib/php/20240924/pdo_sqlite.so -d extension=/usr/lib/php/20240924/sqlite3.so -d extension=/usr/lib/php/20240924/zip.so -r '\''echo "PHP=".PHP_VERSION." API=".PHP_API_VERSION." PDO=".implode(",",PDO::getAvailableDrivers())." ZIP=".(class_exists("ZipArchive")?"yes":"no")."\\n";'\'' > /out/runtime.txt
+          '
+          sha256sum phase3-runtime/*.so > phase3-runtime/SHA256SUMS.txt
+          for f in phase3-runtime/*.so; do base64 -w0 "$f" > "$f.b64"; rm "$f"; done
+      - name: Commit temporary runtime payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add phase3-runtime
+          git commit -m 'ci: publish temporary VF Forge Phase3 runtime payload'
+          git push
