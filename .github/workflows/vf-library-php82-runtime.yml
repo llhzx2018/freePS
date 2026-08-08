@@ -1,0 +1,28 @@
+name: VF Library PHP 8.2 runtime packages
+on:
+  push:
+    branches: [vf-library-phase3-env-20260808]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
+    steps:
+      - name: Download PHP 8.2 runtime packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apt-get update
+          mkdir -p /out
+          cd /out
+          apt-get download php8.2-cli php8.2-common php8.2-opcache php8.2-readline php8.2-sqlite3 php8.2-zip sqlite3 libzip4
+          sha256sum *.deb > SHA256SUMS.txt
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-library-php82-runtime
+          path: /out/*
+          if-no-files-found: error
+          retention-days: 1
