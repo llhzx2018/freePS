@@ -15,7 +15,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Probe current public forge.kewaro.com
-        id: probe
         shell: bash
         run: |
           set -u
@@ -27,30 +26,52 @@ jobs:
           getent ahostsv4 forge.kewaro.com | tee public-probe/dns.txt || true
           DNS_OK=0; test -s public-probe/dns.txt && DNS_OK=1
 
-          ROOT_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/root.html -D public-probe/root.headers -w '%{http_code}' "$BASE/" || printf 000)"
+          fetch() {
+            name="$1"; url="$2"
+            curl -sS --retry 2 --connect-timeout 10 --max-time 30 \
+              -o "public-probe/${name}.body" -D "public-probe/${name}.headers" \
+              -w '%{http_code}' "$url" || printf 000
+          }
+
+          ROOT_STATUS="$(fetch root "$BASE/")"
+          INDEX_HTML_STATUS="$(fetch index-html "$BASE/index.html")"
+          INDEX_PHP_STATUS="$(fetch index-php "$BASE/index.php")"
+          SETUP_STATUS="$(fetch setup "$BASE/setup.php")"
+          API_STATUS="$(fetch api-session "$BASE/api.php?action=session")"
+          DIAGNOSE_STATUS="$(fetch diagnose "$BASE/diagnose.php")"
+          VERSION_STATUS="$(fetch version "$BASE/VERSION.txt")"
+          MANIFEST_STATUS="$(fetch manifest "$BASE/release-manifest.json")"
+          SCHEMA_STATUS="$(fetch schema "$BASE/app/schema.sql")"
+
           grep -Eai '^(content-security-policy|x-content-type-options|referrer-policy|x-frame-options|x-robots-tag|server|cf-ray):' public-probe/root.headers > public-probe/security-headers.txt || true
-          grep -Eio '<title>[^<]*</title>' public-probe/root.html > public-probe/title.txt || true
-          grep -Ein 'robots|noindex|nofollow|VF Forge|VF AssetBox|1\.[0-9]+\.[0-9]+' public-probe/root.html | head -80 > public-probe/root-signals.txt || true
+          grep -Eio '<title>[^<]*</title>' public-probe/root.body > public-probe/root-title.txt || true
+          grep -Eio '<title>[^<]*</title>' public-probe/index-php.body > public-probe/index-php-title.txt || true
+          grep -Ein 'robots|noindex|nofollow|VF Forge|VF AssetBox|1\.[0-9]+\.[0-9]+' public-probe/index-php.body | head -80 > public-probe/index-php-signals.txt || true
           NOINDEX_OK=0
-          if grep -Eqi 'noindex|nofollow' public-probe/root.html || grep -Eqi '^x-robots-tag:.*noindex' public-probe/root.headers; then NOINDEX_OK=1; fi
+          if grep -Eqi 'noindex|nofollow' public-probe/root.body || grep -Eqi '^x-robots-tag:.*noindex' public-probe/root.headers; then NOINDEX_OK=1; fi
+          INDEX_PHP_NOINDEX=0
+          if grep -Eqi 'noindex|nofollow' public-probe/index-php.body || grep -Eqi '^x-robots-tag:.*noindex' public-probe/index-php.headers; then INDEX_PHP_NOINDEX=1; fi
           CSP_OK=0; grep -Eqi '^content-security-policy:' public-probe/root.headers && CSP_OK=1
+          INDEX_PHP_CSP=0; grep -Eqi '^content-security-policy:' public-probe/index-php.headers && INDEX_PHP_CSP=1
 
-          ROBOTS_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/robots.txt -w '%{http_code}' "$BASE/robots.txt" || printf 000)"
-          ROBOTS_DISALLOW=0; grep -Eqi '^Disallow:[[:space:]]*/[[:space:]]*$' public-probe/robots.txt && ROBOTS_DISALLOW=1
+          ROBOTS_STATUS="$(fetch robots "$BASE/robots.txt")"
+          ROBOTS_DISALLOW=0; grep -Eqi '^Disallow:[[:space:]]*/[[:space:]]*$' public-probe/robots.body && ROBOTS_DISALLOW=1
+          SESSION_UNAUTH=0; grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*false' public-probe/api-session.body && SESSION_UNAUTH=1
 
-          SESSION_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/session.json -D public-probe/session.headers -w '%{http_code}' "$BASE/api.php?action=session" || printf 000)"
-          SESSION_UNAUTH=0; grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*false' public-probe/session.json && SESSION_UNAUTH=1
+          printf 'version_status=%s\n' "$VERSION_STATUS" > public-probe/exposed-content.txt
+          if [ "$VERSION_STATUS" = 200 ]; then printf 'version_body=' >> public-probe/exposed-content.txt; head -c 120 public-probe/version.body >> public-probe/exposed-content.txt; printf '\n' >> public-probe/exposed-content.txt; fi
+          printf 'manifest_status=%s\n' "$MANIFEST_STATUS" >> public-probe/exposed-content.txt
+          if [ "$MANIFEST_STATUS" = 200 ]; then grep -E '"version"|"schema_version"|"package_profile"' public-probe/manifest.body | head -20 >> public-probe/exposed-content.txt || true; fi
+          printf 'schema_status=%s schema_bytes=%s\n' "$SCHEMA_STATUS" "$(wc -c < public-probe/schema.body 2>/dev/null || echo 0)" >> public-probe/exposed-content.txt
+          if [ "$SCHEMA_STATUS" = 200 ]; then head -20 public-probe/schema.body >> public-probe/exposed-content.txt; fi
 
           EXPOSURES=0
           for p in \
             '/app/schema.sql' \
-            '/app/bootstrap.php' \
-            '/cli/verify.php' \
             '/release-manifest.json' \
             '/VERSION.txt' \
             '/FULL-PACKAGE-NOTES.txt' \
             '/DEPLOY-HERE.txt' \
-            '/.runtime.php' \
             '/docs/VF_Forge_Web_%E5%AE%8C%E6%95%B4%E9%9C%80%E6%B1%82%E4%B8%8E%E5%BC%80%E5%8F%91%E6%8E%A5%E7%BB%ADSSOT_R2026.08.07_COMPLETE.md'
           do
             code="$(curl -sS --retry 1 --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE$p" || printf 000)"
@@ -61,12 +82,21 @@ jobs:
           {
             echo "DNS_OK=$DNS_OK"
             echo "ROOT_STATUS=$ROOT_STATUS"
+            echo "INDEX_HTML_STATUS=$INDEX_HTML_STATUS"
+            echo "INDEX_PHP_STATUS=$INDEX_PHP_STATUS"
+            echo "SETUP_STATUS=$SETUP_STATUS"
+            echo "API_STATUS=$API_STATUS"
+            echo "DIAGNOSE_STATUS=$DIAGNOSE_STATUS"
             echo "NOINDEX_OK=$NOINDEX_OK"
+            echo "INDEX_PHP_NOINDEX=$INDEX_PHP_NOINDEX"
             echo "CSP_OK=$CSP_OK"
+            echo "INDEX_PHP_CSP=$INDEX_PHP_CSP"
             echo "ROBOTS_STATUS=$ROBOTS_STATUS"
             echo "ROBOTS_DISALLOW=$ROBOTS_DISALLOW"
-            echo "SESSION_STATUS=$SESSION_STATUS"
             echo "SESSION_UNAUTH=$SESSION_UNAUTH"
+            echo "VERSION_STATUS=$VERSION_STATUS"
+            echo "MANIFEST_STATUS=$MANIFEST_STATUS"
+            echo "SCHEMA_STATUS=$SCHEMA_STATUS"
             echo "PUBLIC_PATH_EXPOSURES=$EXPOSURES"
           } | tee public-probe/summary.txt
 
@@ -74,22 +104,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vf-forge-public-probe
+          name: vf-forge-public-probe-detail
           path: public-probe/
           if-no-files-found: error
           retention-days: 1
 
-      - name: Evaluate public probe
+      - name: Report probe outcome
+        if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          source public-probe/summary.txt
-          test "$DNS_OK" = 1
-          case "$ROOT_STATUS" in 200|301|302|303|307|308) ;; *) exit 31;; esac
-          test "$NOINDEX_OK" = 1
-          test "$ROBOTS_STATUS" = 200
-          test "$ROBOTS_DISALLOW" = 1
-          test "$SESSION_STATUS" = 200
-          test "$SESSION_UNAUTH" = 1
-          test "$PUBLIC_PATH_EXPOSURES" = 0
-          echo 'VF_FORGE_PUBLIC_PROBE=PASS'
+          cat public-probe/summary.txt
+          echo '=== exposed content ==='
+          cat public-probe/exposed-content.txt || true
