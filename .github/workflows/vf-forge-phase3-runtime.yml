@@ -16,32 +16,35 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: true
-      - name: Extract Debian 13 PHP 8.4 runtime modules
+      - name: Fetch Debian 13 PHP runtime packages
         shell: bash
         run: |
           set -euo pipefail
           rm -rf phase3-runtime
-          mkdir -p phase3-runtime
-          docker run --rm -v "$PWD/phase3-runtime:/out" debian:trixie bash -lc '
+          mkdir -p phase3-runtime/raw phase3-runtime/chunks
+          docker run --rm -v "$PWD/phase3-runtime/raw:/out" debian:trixie bash -lc '
             set -euo pipefail
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends php8.4-cli php8.4-sqlite3 php8.4-zip
-            test -f /usr/lib/php/20240924/pdo_sqlite.so
-            test -f /usr/lib/php/20240924/sqlite3.so
-            test -f /usr/lib/php/20240924/zip.so
-            cp /usr/lib/php/20240924/pdo_sqlite.so /out/
-            cp /usr/lib/php/20240924/sqlite3.so /out/
-            cp /usr/lib/php/20240924/zip.so /out/
-            php -r '\''$p=new PDO("sqlite::memory:"); echo "PHP=".PHP_VERSION." PDO=".implode(",",PDO::getAvailableDrivers())." SQLITE=".$p->query("select sqlite_version()")->fetchColumn()." ZIP=".(class_exists("ZipArchive")?"yes":"no")."\\n";'\'' > /out/runtime.txt
+            cd /out
+            apt-get download php8.4-sqlite3 php8.4-zip
+            sha256sum *.deb > SHA256SUMS.txt
+            dpkg-deb -f php8.4-sqlite3_*.deb Package Version Architecture > sqlite-package.txt
+            dpkg-deb -f php8.4-zip_*.deb Package Version Architecture > zip-package.txt
           '
-          sha256sum phase3-runtime/*.so > phase3-runtime/SHA256SUMS.txt
-          for f in phase3-runtime/*.so; do base64 -w0 "$f" > "$f.b64"; rm "$f"; done
+          cp phase3-runtime/raw/SHA256SUMS.txt phase3-runtime/SHA256SUMS.txt
+          cp phase3-runtime/raw/*-package.txt phase3-runtime/
+          for f in phase3-runtime/raw/*.deb; do
+            base=$(basename "$f" .deb)
+            split -b 16000 -d -a 2 "$f" "phase3-runtime/chunks/${base}.part-"
+          done
+          for p in phase3-runtime/chunks/*.part-*; do base64 -w0 "$p" > "$p.b64"; rm "$p"; done
+          rm -rf phase3-runtime/raw
       - name: Commit temporary runtime payload
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add phase3-runtime
-          git commit -m 'ci: publish temporary VF Forge Phase3 runtime payload'
+          git add -A phase3-runtime
+          git commit -m 'ci: publish temporary VF Forge Phase3 Debian runtime packages'
           git push
