@@ -26,14 +26,13 @@ jobs:
             set -euo pipefail
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends php8.4-cli php8.4-sqlite3 php8.4-zip
-            test "$(php -r "echo PHP_VERSION;")" = "8.4.23" || true
             test -f /usr/lib/php/20240924/pdo_sqlite.so
             test -f /usr/lib/php/20240924/sqlite3.so
             test -f /usr/lib/php/20240924/zip.so
             cp /usr/lib/php/20240924/pdo_sqlite.so /out/
             cp /usr/lib/php/20240924/sqlite3.so /out/
             cp /usr/lib/php/20240924/zip.so /out/
-            php -d extension=/usr/lib/php/20240924/pdo_sqlite.so -d extension=/usr/lib/php/20240924/sqlite3.so -d extension=/usr/lib/php/20240924/zip.so -r '\''echo "PHP=".PHP_VERSION." API=".PHP_API_VERSION." PDO=".implode(",",PDO::getAvailableDrivers())." ZIP=".(class_exists("ZipArchive")?"yes":"no")."\\n";'\'' > /out/runtime.txt
+            php -r '\''$p=new PDO("sqlite::memory:"); echo "PHP=".PHP_VERSION." PDO=".implode(",",PDO::getAvailableDrivers())." SQLITE=".$p->query("select sqlite_version()")->fetchColumn()." ZIP=".(class_exists("ZipArchive")?"yes":"no")."\\n";'\'' > /out/runtime.txt
           '
           sha256sum phase3-runtime/*.so > phase3-runtime/SHA256SUMS.txt
           for f in phase3-runtime/*.so; do base64 -w0 "$f" > "$f.b64"; rm "$f"; done
