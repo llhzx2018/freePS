@@ -1,0 +1,1 @@
+PHP=8.4.24 PDO=sqlite SQLITE=3.46.1 ZIP=yes\n

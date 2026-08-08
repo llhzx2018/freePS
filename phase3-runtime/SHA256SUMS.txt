@@ -1,0 +1,3 @@
+5dd7280584ec462af9abe2eb167db0c0c4194d874c7d2f44e619e105740cef03  phase3-runtime/pdo_sqlite.so
+cfbd90b95c1c6c4e1104d3df2e9b750482cad0163c6b3b3e120b95b592d680cb  phase3-runtime/sqlite3.so
+8990d7d45646e863f27dd3672d5690caa209186e97338f15c2332216ac35dd5b  phase3-runtime/zip.so
