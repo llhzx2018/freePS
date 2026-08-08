@@ -43,17 +43,69 @@ jobs:
           echo '=== Required extensions ==='
           php -r '$required=["pdo_sqlite","sqlite3","zip","fileinfo","openssl","mbstring","json","session"]; foreach($required as $e){echo $e,"=",extension_loaded($e)?"PASS":"FAIL",PHP_EOL;if(!extension_loaded($e))exit(22);}'
           php -r 'echo "ZipArchive=",class_exists("ZipArchive")?"PASS":"FAIL",PHP_EOL; if(!class_exists("ZipArchive")) exit(23);'
-          echo '=== SQLite CLI ==='
           sqlite3 --version
-          echo '=== tar ==='
           tar --version | head -1
-          echo '=== OPcache ==='
           php -d opcache.enable_cli=1 -r 'echo "Zend OPcache=",extension_loaded("Zend OPcache")?"PASS":"FAIL",PHP_EOL; if(!extension_loaded("Zend OPcache")) exit(24);'
-          echo '=== Nginx ==='
           nginx -v
-          echo '=== Browser ==='
           (google-chrome --version || chromium --version || chromium-browser --version)
           echo 'VF_FORGE_STAGE3_ENVIRONMENT=PASS'
+
+      - name: Probe current public forge.kewaro.com
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://forge.kewaro.com'
+          mkdir -p public-probe
+          echo '=== DNS ==='
+          getent ahostsv4 forge.kewaro.com | tee public-probe/dns.txt
+          test -s public-probe/dns.txt
+
+          echo '=== root ==='
+          ROOT_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/root.html -D public-probe/root.headers -w '%{http_code}' "$BASE/")"
+          echo "ROOT_STATUS=$ROOT_STATUS"
+          case "$ROOT_STATUS" in 200|301|302|303|307|308) ;; *) exit 31;; esac
+          grep -Eai '^(content-security-policy|x-content-type-options|referrer-policy|x-frame-options|x-robots-tag):' public-probe/root.headers | tee public-probe/security-headers.txt || true
+          grep -Eqi 'noindex|nofollow' public-probe/root.html || grep -Eqi '^x-robots-tag:.*noindex' public-probe/root.headers
+
+          echo '=== robots ==='
+          ROBOTS_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/robots.txt -w '%{http_code}' "$BASE/robots.txt")"
+          echo "ROBOTS_STATUS=$ROBOTS_STATUS"
+          test "$ROBOTS_STATUS" = '200'
+          grep -Eqi '^Disallow:[[:space:]]*/[[:space:]]*$' public-probe/robots.txt
+
+          echo '=== unauth session endpoint ==='
+          SESSION_STATUS="$(curl -sS --retry 2 --connect-timeout 10 --max-time 30 -o public-probe/session.json -w '%{http_code}' "$BASE/api.php?action=session")"
+          echo "SESSION_STATUS=$SESSION_STATUS"
+          test "$SESSION_STATUS" = '200'
+          grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*false' public-probe/session.json
+
+          echo '=== blocked engineering/private paths ==='
+          : > public-probe/path-status.txt
+          for p in \
+            '/app/schema.sql' \
+            '/app/bootstrap.php' \
+            '/cli/verify.php' \
+            '/release-manifest.json' \
+            '/VERSION.txt' \
+            '/FULL-PACKAGE-NOTES.txt' \
+            '/DEPLOY-HERE.txt' \
+            '/.runtime.php' \
+            '/docs/VF_Forge_Web_%E5%AE%8C%E6%95%B4%E9%9C%80%E6%B1%82%E4%B8%8E%E5%BC%80%E5%8F%91%E6%8E%A5%E7%BB%ADSSOT_R2026.08.07_COMPLETE.md'
+          do
+            code="$(curl -sS --retry 1 --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE$p")"
+            printf '%s %s\n' "$code" "$p" | tee -a public-probe/path-status.txt
+            case "$code" in 403|404|410) ;; *) echo "PUBLIC_PATH_EXPOSURE=$p status=$code"; exit 32;; esac
+          done
+
+          echo 'VF_FORGE_PUBLIC_PROBE=PASS'
+
+      - name: Upload public probe evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-forge-public-probe
+          path: public-probe/
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Build portable PHP 8.2 artifact
         shell: bash
@@ -80,15 +132,11 @@ jobs:
           CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
           REAL_BIN="$(readlink -f "$CHROME_BIN")"
           CHROME_DIR="$(dirname "$REAL_BIN")"
-          echo "chrome_bin=$CHROME_BIN"
-          echo "real_bin=$REAL_BIN"
-          echo "chrome_dir=$CHROME_DIR"
           "$CHROME_BIN" --version
           mkdir -p chrome-artifact
           tar -C "$(dirname "$CHROME_DIR")" -czf chrome-artifact/chrome-runtime.tar.gz "$(basename "$CHROME_DIR")"
           printf '%s\n' "$REAL_BIN" > chrome-artifact/ORIGINAL_PATH.txt
           sha256sum chrome-artifact/chrome-runtime.tar.gz | tee chrome-artifact/SHA256SUMS
-          du -h chrome-artifact/chrome-runtime.tar.gz
 
       - name: Upload portable Chrome runtime
         uses: actions/upload-artifact@v4
