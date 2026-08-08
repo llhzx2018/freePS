@@ -22,9 +22,10 @@ jobs:
             set -euo pipefail
             apt-get update
             cd /out
-            apt-get download php8.4-sqlite3 php8.4-zip
+            apt-get download php8.4-sqlite3 php8.4-curl php8.4-zip
             sha256sum *.deb > SHA256SUMS.txt
             dpkg-deb -f php8.4-sqlite3_*.deb Package Version Architecture > sqlite-package.txt
+            dpkg-deb -f php8.4-curl_*.deb Package Version Architecture > curl-package.txt
             dpkg-deb -f php8.4-zip_*.deb Package Version Architecture > zip-package.txt
           '
       - name: Upload temporary runtime artifact
