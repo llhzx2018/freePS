@@ -35,7 +35,7 @@ jobs:
           cp phase3-runtime/raw/*-package.txt phase3-runtime/
           for f in phase3-runtime/raw/*.deb; do
             base=$(basename "$f" .deb)
-            split -b 16000 -d -a 2 "$f" "phase3-runtime/chunks/${base}.part-"
+            split -b 4500 -d -a 2 "$f" "phase3-runtime/chunks/${base}.part-"
           done
           for p in phase3-runtime/chunks/*.part-*; do base64 -w0 "$p" > "$p.b64"; rm "$p"; done
           rm -rf phase3-runtime/raw
