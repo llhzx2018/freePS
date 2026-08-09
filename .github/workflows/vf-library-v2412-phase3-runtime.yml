@@ -1,0 +1,56 @@
+name: VF Library V2.4.12 Phase3 Runtime
+
+on:
+  push:
+    branches:
+      - tmp-vf-library-v2412-phase3-runtime-20260810
+    paths:
+      - '.github/workflows/vf-library-v2412-phase3-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Debian 13 PHP 8.4 runtime dependency artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf phase3-runtime
+          mkdir -p phase3-runtime/extensions phase3-runtime/bin phase3-runtime/lib
+          docker run --rm -v "$PWD/phase3-runtime:/out" debian:trixie bash -lc '
+            set -euo pipefail
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends php8.4-cli php8.4-sqlite3 php8.4-zip sqlite3 ca-certificates
+            extdir="$(php -r '\''echo ini_get("extension_dir");'\'')"
+            cp "$extdir/pdo_sqlite.so" /out/extensions/
+            cp "$extdir/sqlite3.so" /out/extensions/
+            cp "$extdir/zip.so" /out/extensions/
+            cp /usr/bin/sqlite3 /out/bin/
+            cp -L /usr/lib/x86_64-linux-gnu/libzip.so.5 /out/lib/
+            cp -L /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 /out/lib/
+            {
+              echo "PHP=$(php -r '\''echo PHP_VERSION;'\'')"
+              echo "PHP_API=$(php -r '\''echo PHP_API_VERSION;'\'')"
+              echo "EXTENSION_DIR=$extdir"
+              echo "SQLITE3_CLI=$(sqlite3 --version | head -1)"
+              php -d extension="$extdir/pdo_sqlite.so" -d extension="$extdir/sqlite3.so" -d extension="$extdir/zip.so" -r '\''echo "PDO_DRIVERS=".implode(",",PDO::getAvailableDrivers())."\nZIPARCHIVE=".(class_exists("ZipArchive")?"yes":"no")."\nSQLITE3_EXT=".(class_exists("SQLite3")?"yes":"no")."\nSQLITE_LIB=".SQLite3::version()["versionString"]."\n";'\''
+              php -d extension="$extdir/pdo_sqlite.so" -r '\''$p=new PDO("sqlite::memory:"); echo "FTS5=".($p->query("select sqlite_compileoption_used('"'"'ENABLE_FTS5'"'"')")->fetchColumn()?"yes":"no")."\n";'\''
+            } > /out/runtime.txt
+            ldd "$extdir/pdo_sqlite.so" > /out/pdo_sqlite.ldd.txt
+            ldd "$extdir/sqlite3.so" > /out/sqlite3.ldd.txt
+            ldd "$extdir/zip.so" > /out/zip.ldd.txt
+          '
+          sha256sum phase3-runtime/extensions/*.so phase3-runtime/bin/sqlite3 phase3-runtime/lib/* > phase3-runtime/SHA256SUMS.txt
+          cat phase3-runtime/runtime.txt
+          cat phase3-runtime/SHA256SUMS.txt
+      - name: Upload dependency artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-library-v2412-phase3-runtime
+          path: phase3-runtime
+          if-no-files-found: error
+          retention-days: 1
