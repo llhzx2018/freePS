@@ -34,11 +34,10 @@ jobs:
             cp -L /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 /out/lib/
             {
               echo "PHP=$(php -r '\''echo PHP_VERSION;'\'')"
-              echo "PHP_API=$(php -r '\''echo PHP_API_VERSION;'\'')"
               echo "EXTENSION_DIR=$extdir"
               echo "SQLITE3_CLI=$(sqlite3 --version | head -1)"
-              php -d extension="$extdir/pdo_sqlite.so" -d extension="$extdir/sqlite3.so" -d extension="$extdir/zip.so" -r '\''echo "PDO_DRIVERS=".implode(",",PDO::getAvailableDrivers())."\nZIPARCHIVE=".(class_exists("ZipArchive")?"yes":"no")."\nSQLITE3_EXT=".(class_exists("SQLite3")?"yes":"no")."\nSQLITE_LIB=".SQLite3::version()["versionString"]."\n";'\''
-              php -d extension="$extdir/pdo_sqlite.so" -r '\''$p=new PDO("sqlite::memory:"); echo "FTS5=".($p->query("select sqlite_compileoption_used('"'"'ENABLE_FTS5'"'"')")->fetchColumn()?"yes":"no")."\n";'\''
+              php -r '\''echo "PDO_DRIVERS=".implode(",",PDO::getAvailableDrivers())."\nZIPARCHIVE=".(class_exists("ZipArchive")?"yes":"no")."\nSQLITE3_EXT=".(class_exists("SQLite3")?"yes":"no")."\nSQLITE_LIB=".SQLite3::version()["versionString"]."\n";'\''
+              php -r '\''$p=new PDO("sqlite::memory:"); $p->exec("CREATE VIRTUAL TABLE t USING fts5(x)"); $p->exec("INSERT INTO t VALUES (\"hello world\")"); echo "FTS5=".(($p->query("SELECT count(*) FROM t WHERE t MATCH \"hello\"")->fetchColumn()==1)?"yes":"no")."\n";'\''
             } > /out/runtime.txt
             ldd "$extdir/pdo_sqlite.so" > /out/pdo_sqlite.ldd.txt
             ldd "$extdir/sqlite3.so" > /out/sqlite3.ldd.txt
