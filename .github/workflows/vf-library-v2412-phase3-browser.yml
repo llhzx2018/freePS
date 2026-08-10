@@ -1,0 +1,38 @@
+name: VF Library V2.4.12 Phase3 Browser
+
+on:
+  push:
+    branches:
+      - tmp-vf-library-v2412-phase3-runtime-20260810
+    paths:
+      - '.github/workflows/vf-library-v2412-phase3-browser.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  relay-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Install exact Playwright browser
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --user 'playwright==1.57.0'
+          python3 -m playwright install chromium-headless-shell
+          shell_dir="$(find "$HOME/.cache/ms-playwright" -maxdepth 1 -type d -name 'chromium_headless_shell-*' | head -1)"
+          test -n "$shell_dir"
+          mkdir -p artifact
+          cp -a "$shell_dir" artifact/
+          tar -C artifact -czf playwright-1.57.0-chromium-headless-shell.tar.gz "$(basename "$shell_dir")"
+          sha256sum playwright-1.57.0-chromium-headless-shell.tar.gz > playwright-1.57.0-chromium-headless-shell.tar.gz.sha256
+      - name: Upload browser runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-library-v2412-phase3-browser
+          path: |
+            playwright-1.57.0-chromium-headless-shell.tar.gz
+            playwright-1.57.0-chromium-headless-shell.tar.gz.sha256
+          retention-days: 1
+          compression-level: 0
