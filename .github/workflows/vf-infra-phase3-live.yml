@@ -1,0 +1,152 @@
+name: VF Infra Phase3 Live Provider Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [vf-infra-phase3-live]
+    paths:
+      - '.github/workflows/vf-infra-phase3-live.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  live-provider-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DYNADOT_KEY: ${{ secrets.VF_INFRA_DYNADOT_KEY }}
+      DYNADOT_SANDBOX_KEY: ${{ secrets.VF_INFRA_DYNADOT_SANDBOX_KEY }}
+      CF_TOKEN_A: ${{ secrets.VF_INFRA_CLOUDFLARE_TOKEN_A }}
+      CF_TOKEN_B: ${{ secrets.VF_INFRA_CLOUDFLARE_TOKEN_B }}
+      LINODE_TOKEN: ${{ secrets.VF_INFRA_LINODE_TOKEN }}
+      VULTR_KEY: ${{ secrets.VF_INFRA_VULTR_KEY }}
+    steps:
+      - name: Check secret availability without printing values
+        id: secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, json
+          names = {
+            'dynadot_live': 'DYNADOT_KEY',
+            'dynadot_sandbox': 'DYNADOT_SANDBOX_KEY',
+            'cloudflare_a': 'CF_TOKEN_A',
+            'cloudflare_b': 'CF_TOKEN_B',
+            'linode': 'LINODE_TOKEN',
+            'vultr': 'VULTR_KEY',
+          }
+          result = {k: bool(os.environ.get(v,'')) for k,v in names.items()}
+          print('Secret presence:', json.dumps(result, sort_keys=True))
+          open('/tmp/secret-presence.json','w').write(json.dumps(result, sort_keys=True))
+          PY
+
+      - name: Live read-only probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess, urllib.parse, hashlib, re
+
+          out = {'providers': {}, 'same_provider_isolation': None, 'cross_provider': None}
+
+          def curl_json(url, headers=None):
+              cmd=['curl','-sS','--fail-with-body','--connect-timeout','12','--max-time','30','-D','/tmp/h.txt','-o','/tmp/b.txt',url]
+              for h in headers or []: cmd += ['-H',h]
+              p=subprocess.run(cmd,text=True,capture_output=True)
+              body=open('/tmp/b.txt','r',errors='replace').read() if os.path.exists('/tmp/b.txt') else ''
+              hdr=open('/tmp/h.txt','r',errors='replace').read() if os.path.exists('/tmp/h.txt') else ''
+              status=0
+              m=re.findall(r'^HTTP/\S+\s+(\d+)',hdr,re.M)
+              if m: status=int(m[-1])
+              data=None
+              try: data=json.loads(body)
+              except Exception: pass
+              return p.returncode,status,data,hdr
+
+          # Dynadot live and sandbox. Never print keys or full responses.
+          for label,envname,host in [
+              ('dynadot_live','DYNADOT_KEY','api.dynadot.com'),
+              ('dynadot_sandbox','DYNADOT_SANDBOX_KEY','api-sandbox.dynadot.com')]:
+              key=os.environ.get(envname,'')
+              if not key:
+                  out['providers'][label]={'status':'BLOCK_NO_SECRET'}
+                  continue
+              q=urllib.parse.urlencode({'key':key,'command':'account_info'})
+              rc,status,data,hdr=curl_json(f'https://{host}/api3.json?{q}')
+              root=(data or {}).get('AccountInfoResponse') if isinstance(data,dict) else None
+              ok=isinstance(root,dict) and str(root.get('Status','')).lower()=='success' and isinstance(root.get('AccountInfo'),dict)
+              username=str((root or {}).get('AccountInfo',{}).get('Username','')) if isinstance(root,dict) else ''
+              out['providers'][label]={'status':'PASS' if ok else 'FAIL','http':status,'account_anchor':hashlib.sha256(username.lower().encode()).hexdigest()[:16] if ok else None}
+
+          # Cloudflare token A/B: Zone Read is the minimum VF Infra contract.
+          cf_ids=[]
+          for label,envname in [('cloudflare_a','CF_TOKEN_A'),('cloudflare_b','CF_TOKEN_B')]:
+              token=os.environ.get(envname,'')
+              if not token:
+                  out['providers'][label]={'status':'BLOCK_NO_SECRET'}
+                  continue
+              rc,status,data,hdr=curl_json('https://api.cloudflare.com/client/v4/zones?per_page=50&page=1',[f'Authorization: Bearer {token}','Content-Type: application/json'])
+              rows=(data or {}).get('result') if isinstance(data,dict) else None
+              accounts=set()
+              if isinstance(rows,list):
+                  for row in rows:
+                      if isinstance(row,dict) and isinstance(row.get('account'),dict) and row['account'].get('id'):
+                          accounts.add(str(row['account']['id']))
+              ok=isinstance(data,dict) and data.get('success') is True and len(accounts)>0
+              ids=sorted(accounts)
+              cf_ids.extend(ids)
+              out['providers'][label]={'status':'PASS' if ok else 'FAIL','http':status,'zones_seen':len(rows) if isinstance(rows,list) else None,'account_anchors':[hashlib.sha256(x.encode()).hexdigest()[:16] for x in ids]}
+          if os.environ.get('CF_TOKEN_A') and os.environ.get('CF_TOKEN_B'):
+              a=out['providers'].get('cloudflare_a',{})
+              b=out['providers'].get('cloudflare_b',{})
+              out['same_provider_isolation']='PASS' if a.get('status')=='PASS' and b.get('status')=='PASS' and set(a.get('account_anchors',[])).isdisjoint(set(b.get('account_anchors',[]))) else 'FAIL'
+
+          # Linode/Akamai.
+          token=os.environ.get('LINODE_TOKEN','')
+          if not token:
+              out['providers']['linode']={'status':'BLOCK_NO_SECRET'}
+          else:
+              rc,status,data,hdr=curl_json('https://api.linode.com/v4/account',[f'Authorization: Bearer {token}'])
+              m=re.findall(r'(?im)^x-customer-uuid:\s*([^\r\n]+)',hdr)
+              account_id=m[-1].strip() if m else (str((data or {}).get('euuid','')) if isinstance(data,dict) else '')
+              rc2,status2,instances,h2=curl_json('https://api.linode.com/v4/linode/instances?page_size=500&page=1',[f'Authorization: Bearer {token}'])
+              rows=(instances or {}).get('data') if isinstance(instances,dict) else None
+              ok=bool(account_id) and isinstance(rows,list)
+              out['providers']['linode']={'status':'PASS' if ok else 'FAIL','http_account':status,'http_instances':status2,'instances_seen':len(rows) if isinstance(rows,list) else None,'account_anchor':hashlib.sha256(account_id.lower().encode()).hexdigest()[:16] if account_id else None}
+
+          # Vultr.
+          token=os.environ.get('VULTR_KEY','')
+          if not token:
+              out['providers']['vultr']={'status':'BLOCK_NO_SECRET'}
+          else:
+              rc,status,data,hdr=curl_json('https://api.vultr.com/v2/account',[f'Authorization: Bearer {token}'])
+              account=(data or {}).get('account') if isinstance(data,dict) else None
+              native=''
+              if isinstance(account,dict): native=str(account.get('id') or account.get('account_id') or '')
+              email=str(account.get('email','')).lower() if isinstance(account,dict) else ''
+              anchor=native or ('email:'+hashlib.sha256(email.encode()).hexdigest()[:40] if email else '')
+              rc2,status2,instances,h2=curl_json('https://api.vultr.com/v2/instances?per_page=500',[f'Authorization: Bearer {token}'])
+              rows=(instances or {}).get('instances') if isinstance(instances,dict) else None
+              ok=bool(anchor) and isinstance(rows,list)
+              out['providers']['vultr']={'status':'PASS' if ok else 'FAIL','http_account':status,'http_instances':status2,'instances_seen':len(rows) if isinstance(rows,list) else None,'account_anchor':hashlib.sha256(anchor.encode()).hexdigest()[:16] if anchor else None}
+
+          present=[v for k,v in out['providers'].items() if v.get('status')=='PASS']
+          out['cross_provider']='PASS' if len(present)>=2 else ('BLOCK_NO_SECRET' if len(present)<2 else 'FAIL')
+          open('/tmp/vf-infra-live-evidence.json','w').write(json.dumps(out,indent=2,sort_keys=True))
+          print(json.dumps(out,indent=2,sort_keys=True))
+
+          # Fail only on real failures. Missing secrets remain explicit BLOCK evidence.
+          if any(v.get('status')=='FAIL' for v in out['providers'].values()) or out.get('same_provider_isolation')=='FAIL':
+              raise SystemExit(2)
+          PY
+
+      - name: Upload sanitized live evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-infra-phase3-live-evidence
+          path: |
+            /tmp/secret-presence.json
+            /tmp/vf-infra-live-evidence.json
+          retention-days: 1
